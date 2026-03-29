@@ -1,0 +1,28 @@
+RESULT reaching APF-SAC-DR with r=-dist(goal,ee) success (10/10) :
+
+goal=[0.39, 0.34, 0.03] reward=-26.3402 steps=38
+goal=[0.31, 0.38, 0.03] reward=-23.0398 steps=33
+goal=[0.38, 0.39, 0.03] reward=-23.3429 steps=34
+goal=[0.35, 0.34, 0.03] reward=-26.4841 steps=38
+goal=[0.36, 0.34, 0.03] reward=-28.6973 steps=42
+goal=[0.38, 0.35, 0.03] reward=-25.3089 steps=37
+goal=[0.35, 0.38, 0.03] reward=-23.3884 steps=35
+goal=[0.39, 0.38, 0.03] reward=-26.9174 steps=40
+goal=[0.38, 0.4, 0.03] reward=-21.9719 steps=32
+goal=[0.31, 0.36, 0.03] reward=-22.5820 steps=32
+
+
+RESULT reaching SAC-DR with r=-dist(goal,ee) success (10/10) :
+
+
+
+goal=[0.39, 0.34, 0.03] reward=-17.8052 steps=28
+goal=[0.31, 0.38, 0.03] reward=-18.3819 steps=28
+goal=[0.38, 0.39, 0.03] reward=-25.3254 steps=33
+goal=[0.35, 0.34, 0.03] reward=-26.5887 steps=39
+goal=[0.36, 0.34, 0.03] reward=-25.4693 steps=42
+goal=[0.38, 0.35, 0.03] reward=-18.3090 steps=29
+goal=[0.35, 0.38, 0.03] reward=-22.3896 steps=31
+goal=[0.39, 0.38, 0.03] reward=-20.4798 steps=29
+goal=[0.38, 0.4, 0.03] reward=-30.8986 steps=38
+goal=[0.31, 0.36, 0.03] reward=-18.9495 steps=28
