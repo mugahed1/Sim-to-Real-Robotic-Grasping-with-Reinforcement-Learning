@@ -1,0 +1,24 @@
+# Mac
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Logs
+*.log
+*.txt
+
+# Models
+*.h5
+*.zip
+*.npy
+*.npz
+
+# VSCode
+.vscode/
+
+# Model folders
+model/
+logs/
+bin/
