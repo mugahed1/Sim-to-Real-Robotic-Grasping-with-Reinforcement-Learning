@@ -11,9 +11,9 @@ import numpy as np
 
 class Agent:
  
-    def __init__(self, input_dims, alpha=0.001, beta=0.002, env=None,
+    def __init__(self, input_dims, alpha=0.00005, beta=0.002, env=None,
                  gamma=0.99, n_actions=2, max_size=1000000, tau=0.005,
-                 fc1=256, fc2=256, batch_size=256, alpha_sac=0.2):  
+                 fc1=128, fc2=128, batch_size=256, alpha_sac=0.2):  
         self.gamma = gamma
         self.tau = tau
         self.memory = ReplayBuffer(max_size, input_dims, n_actions)

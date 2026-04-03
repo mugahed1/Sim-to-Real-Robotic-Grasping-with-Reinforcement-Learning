@@ -5,7 +5,7 @@ import tensorflow.keras as keras
 from tensorflow.keras.layers import Dense
 
 class CriticNetwork(keras.Model):
-    def __init__(self, fc1_dims=256, fc2_dims=256,  
+    def __init__(self, fc1_dims=128, fc2_dims=128,  
                  name='critic', chkpt_dir=''):
         super(CriticNetwork, self).__init__()
         self.fc1_dims = fc1_dims
@@ -34,7 +34,7 @@ class ActorNetwork(keras.Model):
     SAC Actor Network: Outputs mean and log_std for Gaussian policy
     Supports reparameterization trick for sampling actions
     """
-    def __init__(self, fc1_dims=256, fc2_dims=256,  
+    def __init__(self, fc1_dims=128, fc2_dims=128,  
                  n_actions=2, max_action=1.0, name='actor', chkpt_dir=''):
         super(ActorNetwork, self).__init__()
         self.fc1_dims = fc1_dims
@@ -47,7 +47,7 @@ class ActorNetwork(keras.Model):
         self.checkpoint_file = os.path.join(self.checkpoint_dir, 
                     self.model_name+'_sac.h5')
 
-        # Simplified architecture: 2 layers (256-256)
+        # Simplified architecture: 2 layers (128-128)
         self.fc1 = Dense(self.fc1_dims, activation='relu',
                          kernel_initializer='he_uniform')
         self.fc2 = Dense(self.fc2_dims, activation='relu',

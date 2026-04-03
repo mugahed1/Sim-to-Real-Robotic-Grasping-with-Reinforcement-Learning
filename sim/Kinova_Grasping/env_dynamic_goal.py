@@ -23,7 +23,7 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
         self.mode = mode
 
         self.obs_rms = RunningMeanStd(
-            shape=(23,),
+            shape=(29,),
             epsilon=1e-8,
             batch_size=200 
         )
@@ -87,7 +87,7 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
         self._history_len = 1
 
         
-        self._observation_space = Box(-np.inf, np.inf, (23,))
+        self._observation_space = Box(-np.inf, np.inf, (29,))
         self._action_space = Box(-1, 1, (7,)) # 6 joints + gripper state action    
         try:
             self._state_space = extend_space(self._observation_space, self._history_len)
@@ -135,9 +135,12 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
         self._total_steps = 0
         self._norm_freeze_after_steps = 100000
 
+        # Previous-step trackers for observations
+        self.prev_joint_angles = np.zeros(6, dtype=np.float32)
+        self.prev_ee_pos = np.zeros(3, dtype=np.float32)
 
         
-
+        
     
     @property
     def action_space(self): 
@@ -199,8 +202,16 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
         # Sample new goal 
         self.setup_goal()
 
-        
-
+        # Initialize previous trackers based on current state
+        self.prev_joint_angles = np.array([
+            self.data.qpos[self.joint_ids[0]],
+            self.data.qpos[self.joint_ids[1]],
+            self.data.qpos[self.joint_ids[2]],
+            self.data.qpos[self.joint_ids[3]],
+            self.data.qpos[self.joint_ids[4]],
+            self.data.qpos[self.joint_ids[5]],
+        ], dtype=np.float32)
+        self.prev_ee_pos = self.end_effector_pos().astype(np.float32)
 
         return self.get_observation()
 
@@ -272,7 +283,7 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
         # ============================================================
         if self.phase == 0:
             # Base reward from reaching
-            
+            # reward -= 0.2*self.gripper_state()
             
             
             
@@ -290,6 +301,10 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
         # PHASE 1: GRASPING 
         # ============================================================
         elif self.phase == 1:
+            # reward+=self.gripper_state()
+            # if gripper_action>0:
+            #     reward += 0.5*gripper_action
+            
 
             touch_right_finger = False
             touch_left_finger = False
@@ -398,9 +413,9 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
         # 3 for dx dy dz: end-effector distance to the goal (goal - ee)
         relative_vector = (goal_pos - tip_pos).astype(np.float32)  # dx, dy, dz
 
-        # 3 for vx vy vz: end-effector velocity
-        cvel = self.data.cvel[self.ee_body].copy()
-        ee_linear_vel = cvel[3:].astype(np.float32)
+        # Replace velocity with previous joint angles (6) and previous EE position (3)
+        prev_joint_angles = self.prev_joint_angles.astype(np.float32)
+        prev_ee_pos = self.prev_ee_pos.astype(np.float32)
         
         # 4 for gripper (end-effector) orientation as quaternion (w, x, y, z)
         ee_quat = self.data.xquat[self.ee_body].astype(np.float32)
@@ -418,12 +433,13 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
         # 1 for gripper state: open or closed
         gripper_state = np.array([self.gripper_state()], dtype=np.float32)
 
-        # Observation: 23 dims (ee_pos + goal_pos + relative + vel + orientation + joints + gripper)
+        # Observation: 29 dims (ee_pos + goal_pos + relative + prev_joints + prev_ee_pos + orientation + joints + gripper)
         obs_raw = np.concatenate([
             ee_pos,            # 3
             goal_pos_f32,      # 3
             relative_vector,   # 3
-            ee_linear_vel,     # 3
+            prev_joint_angles, # 6
+            prev_ee_pos,       # 3
             ee_quat,           # 4
             joint_angles,      # 6
             gripper_state,     # 1
@@ -432,6 +448,10 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
        #  Online normalization (freeze after 100k steps to avoid distribution drift)
         if self.mode == "train" and self._total_steps < self._norm_freeze_after_steps:
             self.obs_rms.update(obs_raw)
+        
+        # Update previous trackers for next observation
+        self.prev_joint_angles = joint_angles.copy()
+        self.prev_ee_pos = ee_pos.copy()
         
         return self.obs_rms.normalize(obs_raw).astype(np.float32)
 
@@ -514,7 +534,7 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
         
         
         
-        for _ in range(5):
+        for _ in range(10):
             mujoco.mj_step(self.model, self.data)
 
     def gripper_state(self):

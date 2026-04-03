@@ -1,21 +1,27 @@
-import gymnasium as gym
+import gym
 import numpy as np
+from agent import Agent, PotentialAgent
 import matplotlib.pyplot as plt
-from sb3_env_wrapper import SB3MujocoEnv
+from env_dynamic_goal import MujocoKinovaGraspEnv
 from setup_flags import set_up
-from stable_baselines3 import SAC
-from stable_baselines3.common.callbacks import BaseCallback
-from stable_baselines3.common.monitor import Monitor
 import sys
 import os
 import subprocess
 import math
+import tensorflow as tf
 import json
 from tqdm import tqdm
 import logging
-from pathlib import Path
+import cv2
 logger = logging.getLogger('logger')
 logger.setLevel(logging.INFO)
+
+devices = tf.config.list_physical_devices('GPU')
+try:
+    tf.config.experimental.set_memory_growth(devices[0], True)
+    print("Success in setting memory growth")
+except:
+    print("Failed to set memory growth, invalid device or cannot modify virtual devices once initialized.")
 
 
 FLAGS = set_up()
@@ -34,241 +40,142 @@ def plot_learning_curve(x, scores, figure_file):
     plt.savefig(figure_file)
 
 
-class EpisodeTrackingCallback(BaseCallback):
-    """Callback to track episode metrics during SB3 training"""
-    def __init__(self, verbose=0):
-        super(EpisodeTrackingCallback, self).__init__(verbose)
-        self.episode_rewards = []
-        self.episode_lengths = []
-        self.current_episode_reward = 0
-        self.current_episode_length = 0
-        
-    def _on_step(self) -> bool:
-        # Track rewards and lengths
-        if 'episode' in self.locals.get('infos', [{}])[0]:
-            episode_info = self.locals['infos'][0].get('episode')
-            if episode_info is not None:
-                self.episode_rewards.append(episode_info['r'])
-                self.episode_lengths.append(episode_info['l'])
-        return True
-
-
 
 if __name__ == '__main__':
-    # Create wrapped environment for SB3
-    env = SB3MujocoEnv(visualize=True, mode="train")
+    env = MujocoKinovaGraspEnv(visualize=True)
+    agent = Agent(input_dims=env.observation_space.shape, env=env,
+            n_actions=env.action_space.shape[0])
+    potentialagent = PotentialAgent(gamma=agent.gamma)
+    # ---------------------------------------------------------
+    # Optional: resume training from existing experiment (e.g. "exp3")
+    # This loads:
+    #   - SAC networks from tmp/exp3
+    #   - Potential network + trajectories from tmp/exp3
+    #   - Observation normalization stats from tmp/exp3
+    # Set this to None if you want to start from scratch.
+    # ---------------------------------------------------------
+    # RESUME_EXP = "exp3"   # folder name under tmp/ (i.e. tmp/exp3)
+
+    # if RESUME_EXP is not None and not FLAGS.evaluate:
+    #     print(f"[RESUME] Loading models and normalization from tmp/{RESUME_EXP}")
+    #     agent.load_models(RESUME_EXP)
+    #     env.obs_rms.load(exp=RESUME_EXP)
     
-    # Setup output directory
-    output_dir = Path("results") / expname
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # SAC configuration
-    sac_cfg = {
-        "learning_rate": 5e-5,
-        "buffer_size": 1000000,
-        "learning_starts": 10000,
-        "batch_size": 256,
-        "tau": 0.005,
-        "gamma": 0.99,
-        "train_freq": 1,
-        "gradient_steps": 1,
-    }
-    
-    train_cfg = {
-        "seed": 42,
-    }
-    
-    device = "auto"  # or "cuda" or "cpu"
-    
+    n_games = 4000
+    collision_cnt = 0
+    score_history, avg_score_history = [], []
     load_checkpoint = FLAGS.evaluate
-    model_path = output_dir / "sac_model"
-    
-    # Wrap env with Monitor for training (for episode tracking)
-    if not load_checkpoint:
-        env = Monitor(env, str(output_dir / "monitor"))
-    
+
     try:
-        # Helper function to unwrap environment (handles Monitor wrapper)
-        def unwrap_env(env):
-            """Unwrap environment to get the underlying SB3MujocoEnv"""
-            if hasattr(env, 'env'):  # Monitor wrapper
-                return env.env
-            return env
-        
         if load_checkpoint:
-            # Load model for evaluation
-            print(f"Loading model from {model_path}")
-            model = SAC.load(str(model_path), env=env, device=device)
+            n_steps = 0
+            n_games = 3
+            while n_steps <= agent.batch_size:
+                observation = env.reset()
+                action = env.action_space.sample()
+                observation_, reward, done, info, terminated = env.step(action)
+                agent.remember(observation, action, reward, observation_, done)
+                n_steps += 1
+            agent.learn()
+            agent.load_models(FLAGS.exp)
             evaluate = True
         else:
-            # Create new SAC model
-            model = SAC(
-                "MlpPolicy",
-                env,
-                learning_rate=sac_cfg["learning_rate"],
-                buffer_size=sac_cfg["buffer_size"],
-                learning_starts=sac_cfg["learning_starts"],
-                batch_size=sac_cfg["batch_size"],
-                tau=sac_cfg["tau"],
-                gamma=sac_cfg["gamma"],
-                train_freq=sac_cfg["train_freq"],
-                gradient_steps=sac_cfg["gradient_steps"],
-                verbose=1,
-                seed=train_cfg["seed"],
-                device=device,
-                tensorboard_log=str(output_dir / "tensorboard"),
-            )
             evaluate = False
-        
-        if load_checkpoint:
-            # Evaluation mode: run episodes manually
-            n_games = 3
-            collision_cnt = 0
-            score_history = []
-            
-            for i in range(n_games):
-                observation, _ = env.reset()
-                done = False
-                score = 0
-                unwrapped = unwrap_env(env)
-                step_bar = tqdm(total=unwrapped.max_step_count-1, desc=f"Ep {i}", leave=False, ncols=80)
+
+        for i in range(n_games):
+            observation = env.reset()
+            done = False
+            terminated = False
+            score = 0
+            step_per_episode = 0
+            reward_in_episode = []
+            step_bar = tqdm(total=env.max_step_count-1, desc=f"Ep {i}", leave=False, ncols=80)
+
+            obs_floor = [math.floor(obs*100)/100.0 for obs in observation[:6]]
+            trajectory_epi = [obs_floor]
+
+            episode_timed_out = False
+            while not done:
+                action = agent.choose_action(observation, evaluate)
                 
-                while not done:
-                    action, _ = model.predict(observation, deterministic=True)
-                    observation, reward, terminated, truncated, info = env.step(action)
-                    done = terminated or truncated
-                    score += reward
-                    step_bar.update(1)
-                
-                step_bar.close()
-                unwrapped = unwrap_env(env)
-                if unwrapped.collision:
-                    collision_cnt += 1
-                
-                score_history.append(score)
-                avg_score = np.mean(score_history[-100:]) if len(score_history) > 0 else 0
-                
-                print(expname, 'episode ', i, 'score %.1f' % score, 'avg score %.1f' % avg_score,
-                     'final distance', unwrapped.distance_to_goal(), "success_cnt", unwrapped.success_cnt, "collision_cnt", collision_cnt)
-        else:
-            # Training mode: use SB3's learn() method
-            # Calculate total timesteps (n_games * average_episode_length)
-            n_games = 4000
-            # Get episode length from unwrapped env
-            unwrapped_env = unwrap_env(env)
-            avg_episode_length = unwrapped_env.max_step_count
-            total_timesteps = n_games * avg_episode_length
+                observation_, reward, done, info,terminated = env.step(action)
+
+                score += reward
+                step_per_episode += 1
+
+                obs_floor_ = [math.floor(obs*100)/100.0 for obs in observation_[:6]]
+                trajectory_epi.append(obs_floor_)
+
+                shaping_reward = potentialagent.reward_shaping(obs_floor, obs_floor_, evaluate)
+                logging.debug(f"epi {i} step {step_per_episode}, reward: {reward} + {shaping_reward}")
+                logging.debug(f"old obs: {observation}, floor {obs_floor}")
+                logging.debug(f"new obs: {observation_}, floor {obs_floor_}")
+                if evaluate:
+                    reward_in_episode.append(f"{reward}+{shaping_reward}")
+                reward += shaping_reward
+
+                agent.remember(observation, action, reward, observation_, terminated)
+                if not load_checkpoint:
+                    agent.learn()
+                observation = observation_
+                obs_floor = obs_floor_.copy()
+
+                step_bar.update(1)
+
             
-            # Custom callback to track custom metrics and save model periodically
-            class CustomCallback(BaseCallback):
-                def __init__(self, model, model_path, save_freq=1000, verbose=0):
-                    super(CustomCallback, self).__init__(verbose)
-                    self.model = model
-                    self.model_path = model_path
-                    self.save_freq = save_freq
-                    self.episode_count = 0
-                    self.score_history = []
-                    
-                def _on_step(self) -> bool:
-                    # Check if episode ended
-                    if self.locals.get('dones', [False])[0]:
-                        self.episode_count += 1
-                        # Get episode info from monitor
-                        if hasattr(self.training_env, 'get_episode_rewards'):
-                            if len(self.training_env.get_episode_rewards()) > 0:
-                                ep_reward = self.training_env.get_episode_rewards()[-1]
-                                self.score_history.append(ep_reward)
-                                if len(self.score_history) % 10 == 0:
-                                    avg_score = np.mean(self.score_history[-100:]) if len(self.score_history) > 0 else 0
-                                    print(f"Episode {self.episode_count}, Avg Score: {avg_score:.1f}")
-                        
-                        # Save model every save_freq episodes
-                        if self.episode_count % self.save_freq == 0:
-                            checkpoint_path = str(self.model_path) + f"_ep{self.episode_count}"
-                            self.model.save(checkpoint_path)
-                            print(f"Model saved to {checkpoint_path} (Episode {self.episode_count})")
-                            # Keep obs normalization in sync with the saved checkpoint.
-                            # This overwrites tmp/<expname>/mean.npy,var.npy,count.npy each time.
-                            try:
-                                unwrapped_env = self.training_env
-                                if hasattr(unwrapped_env, 'env'):  # Monitor wrapper
-                                    unwrapped_env = unwrapped_env.env
-                                if hasattr(unwrapped_env, '_env'):  # SB3MujocoEnv wrapper
-                                    unwrapped_env._env.obs_rms.save(exp=expname)
-                                    print("Normalization stats saved (obs_rms)")
-                            except Exception as e:
-                                print(f"[WARN] Failed to save normalization stats at episode {self.episode_count}: {e}")
-                    return True
-            
-            # Create callback after model is created
-            callback = CustomCallback(model, model_path, save_freq=500)
-            
-            print(f"Starting training for {total_timesteps} timesteps...")
-            model.learn(
-                total_timesteps=total_timesteps,
-                callback=callback,
-                log_interval=10,
-                progress_bar=True
-            )
-            
-            # After training, run a few evaluation episodes to get final metrics
-            print("\nRunning evaluation episodes...")
-            collision_cnt = 0
-            score_history = []
-            n_eval_episodes = 10
-            
-            for i in range(n_eval_episodes):
-                observation, _ = env.reset()
-                done = False
-                score = 0
+            step_bar.close()
+            if env.collision:
+                collision_cnt+=1
+
+            score_history.append(score)
+            avg_score = np.mean(score_history[-100:])
+            avg_score_history.append(avg_score)
+
+            # After one episode ##
+            if trajectory_epi:
+                potentialagent.add_trajectory(trajectory_epi, score, done)
                 
-                while not done:
-                    action, _ = model.predict(observation, deterministic=True)
-                    observation, reward, terminated, truncated, info = env.step(action)
-                    done = terminated or truncated
-                    score += reward
-                
-                unwrapped = unwrap_env(env)
-                if unwrapped.collision:
-                    collision_cnt += 1
-                
-                score_history.append(score)
-                avg_score = np.mean(score_history[-100:]) if len(score_history) > 0 else 0
-                
-                print(expname, 'eval episode ', i, 'score %.1f' % score, 'avg score %.1f' % avg_score,
-                     'final distance', unwrapped.distance_to_goal(), "success_cnt", unwrapped.success_cnt, "collision_cnt", collision_cnt)
+            potentialagent.learn_pf()
+
+            if potentialagent.potential_learn_cnt == 10:
+                os.makedirs("tmp", exist_ok=True)
+                with open(f'tmp/meta.json', 'a') as f:
+                    f.write(json.dumps({**{'expname': expname, \
+                                            'potential_learn_cnt': potentialagent.potential_learn_cnt, \
+                                            'at episode': i}}))
+
+            print(expname, 'episode ', i, 'score %.1f' % score, 'avg score %.1f' % avg_score, \
+                 'final distance', env.distance_to_goal(), "succes_cnt", env.success_cnt, "collision_cnt", collision_cnt)
+            if evaluate:
+                print(reward_in_episode)    
             
-            # Save score history
-            avg_score_history = []
-            for i in range(len(score_history)):
-                avg_score_history.append(np.mean(score_history[max(0, i-100):(i+1)]))
-            
+            # Save checkpoint every 1000 episodes (only during training)
+            if not load_checkpoint and (i + 1) % 1000 == 0:
+                print(f'... saving checkpoint at episode {i+1} ...')
+                agent.save_models(exp=expname)
+                potentialagent.save_models(exp=expname)
+                env.obs_rms.save(exp=expname)
+                # Also save score history periodically
+                os.makedirs("results", exist_ok=True)
+                np.save(f"results/rewards_average_{expname}_checkpoint_{i+1}.npy", avg_score_history)
+                print(f'... checkpoint saved at episode {i+1} ...')
+
+        # finish training:
+        if not load_checkpoint:
             os.makedirs("results", exist_ok=True)
             np.save(f"results/rewards_average_{expname}.npy", avg_score_history)
-        
-        # Finish training
-        if not load_checkpoint:
-            model.save(str(model_path))
-            print(f"Model saved to {model_path}")
-            
-            # Save normalization stats
-            # Handle both wrapped (Monitor) and unwrapped environments
-            unwrapped_env = env
-            if hasattr(env, 'env'):  # Monitor wrapper
-                unwrapped_env = env.env
-            if hasattr(unwrapped_env, '_env'):  # SB3MujocoEnv wrapper
-                unwrapped_env._env.obs_rms.save(exp=expname)
-                print(f"Normalization stats saved")
-            
-            # Plot learning curve if we have score history
-            if 'score_history' in locals() and len(score_history) > 0:
-                x = [i+1 for i in range(len(score_history))]
-                plot_learning_curve(x, score_history, figure_file=f'apf_ddpg_{expname}.png')
-        
-        env.close()
+            agent.save_models(exp=expname)
+            potentialagent.save_models(exp=expname)
+            env.obs_rms.save(exp=expname)
+            x = [i+1 for i in range(n_games)]
+            plot_learning_curve(x, score_history, figure_file=f'APF_SAC_{expname}.png')
+
+        potentialagent.memory_traj.get_nlargest_trajectories(N_good=1)
+
+        env.closeSim()
         print("Finish training!")
         shutdown_vm()
-        
+
     except (Exception, KeyboardInterrupt) as error:
         print('\nTraining exited early.')
         print(error)
@@ -276,7 +183,7 @@ if __name__ == '__main__':
         fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
         print(exc_type, fname, exc_tb.tb_lineno)
         breakpoint()
-        env.close()
+        env.closeSim()
 
 
 
