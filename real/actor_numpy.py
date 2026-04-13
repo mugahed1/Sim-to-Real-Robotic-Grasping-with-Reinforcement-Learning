@@ -1,7 +1,7 @@
 import numpy as np
 
 
-class ReachActorNP:
+class ActorNP:
     """
     Pure NumPy equivalent of the reach ActorNetwork:
     15-dim input -> 6-dim tanh output in [-1, 1].

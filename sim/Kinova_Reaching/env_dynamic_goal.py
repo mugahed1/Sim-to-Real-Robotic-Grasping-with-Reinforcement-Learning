@@ -89,13 +89,10 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
         try:
             self._state_space = extend_space(self._observation_space, self._history_len)
         except Exception as e:
-            # extend_space from catalyst_rl may not support gymnasium spaces
-            # Since _state_space is only used internally and not by SB3, we can set it to observation_space
-            # or create a simple compatible version
+            
             if self._history_len == 1:
                 self._state_space = self._observation_space
             else:
-                # For history_len > 1, create a Box with expanded shape
                 obs_shape = self._observation_space.shape
                 new_shape = (obs_shape[0] * self._history_len,)
                 self._state_space = Box(-np.inf, np.inf, new_shape, dtype=self._observation_space.dtype)
@@ -116,15 +113,13 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
         self.gripper_open_targets = np.array([0.96, 0.21, -0.96, -0.21])
         self.gripper_closed_targets = np.array([0.45, -1.03, -0.45, 1.03])
 
-        # Initial pose: J0..J5 (rad), gripper state (-1 = open)
         self.init_q_arm = np.array([0, 0, 0, 0, 0, 0], dtype=np.float64)
-        self.init_gripper = -1.0  # -1 = fully open
+        self.init_gripper = -1.0  
         self._ref_joint_qpos_adr = [self.model.jnt_qposadr[self.model.joint(n).id] for n in self.joint_names]
 
         self.required_stable_steps=5
         self.grasp_stable_steps = 0
 
-        # Total env steps (across episodes) for freezing obs normalization
         self._total_steps = 0
         self._norm_freeze_after_steps = 100000
 
@@ -251,9 +246,7 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
         reward = -dist
        
             
-        # # Gripper opening reward (keep gripper open while approaching)
-        # if gripper_action<0:
-        #     reward += 0.1*abs(gripper_action)
+       
         
         
         return reward
@@ -284,7 +277,7 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
             z = self.z_range
             self.target_pose = np.array([x, y, z], dtype=np.float64)
 
-        # Use the cylinder joint ID stored during initialization
+        
         j = self.target_joint_id
         if self.model.jnt_type[j] != mujoco.mjtJoint.mjJNT_FREE:
             raise RuntimeError("Cylinder joint is not a free joint")
@@ -336,7 +329,7 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
         ]).astype(np.float32)
 
         
-       #  Online normalization (freeze after 100k steps to avoid distribution drift)
+       
         if self.mode == "train" and self._total_steps < self._norm_freeze_after_steps:
             self.obs_rms.update(obs_raw)
 
@@ -349,7 +342,7 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
         
         target = self.data.xpos[self.goal_body]
 
-     #  if object is pushed out the reaching zone, we stop the episode 
+     
         if target[0] > 0.7 or target[1]>0.7 : 
             print("collision detected at step", self.step_counter)
             return True
@@ -366,7 +359,7 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
     
     def apply_controls(self, action):
         
-        # Action now has 6 dims: joint deltas for J0..J5
+       
         action = action[:6] * (math.pi / 64.0)
         
         
@@ -424,7 +417,7 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
             alpha = (current - open_i) / (closed_i - open_i)
             alpha = np.clip(alpha, 0.0, 1.0)
 
-            # Store normalized value directly
+           
             normalized.append(alpha)
 
         if not normalized:

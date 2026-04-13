@@ -92,13 +92,10 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
         try:
             self._state_space = extend_space(self._observation_space, self._history_len)
         except Exception as e:
-            # extend_space from catalyst_rl may not support gymnasium spaces
-            # Since _state_space is only used internally and not by SB3, we can set it to observation_space
-            # or create a simple compatible version
+            
             if self._history_len == 1:
                 self._state_space = self._observation_space
             else:
-                # For history_len > 1, create a Box with expanded shape
                 obs_shape = self._observation_space.shape
                 new_shape = (obs_shape[0] * self._history_len,)
                 self._state_space = Box(-np.inf, np.inf, new_shape, dtype=self._observation_space.dtype)
@@ -128,7 +125,7 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
         self.init_gripper = -1.0  # -1 = fully open
         self._ref_joint_qpos_adr = [self.model.jnt_qposadr[self.model.joint(n).id] for n in self.joint_names]
 
-        self.required_stable_steps=1
+        self.required_stable_steps=2
         self.grasp_stable_steps = 0
 
         # Total env steps (across episodes) for freezing obs normalization
@@ -301,7 +298,6 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
         # PHASE 1: GRASPING 
         # ============================================================
         elif self.phase == 1:
-            # reward+=self.gripper_state()
             # if gripper_action>0:
             #     reward += 0.5*gripper_action
             
@@ -336,7 +332,7 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
                 contact_reward = 5.0 + (self.grasp_stable_steps * 2.0)
                 reward += contact_reward
                 
-                # Check if achieved stable grasp (5 consecutive steps)
+                # Check if achieved stable grasp (2 consecutive steps)
                 if self.grasp_stable_steps >= self.required_stable_steps:
                     
                     self.object_grasped = True
@@ -351,8 +347,8 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
                 
                 
         # Penalty if any robot geom touches the floor
-        # if self._touching_floor():
-        #     reward -= 10.0
+        if self._touching_floor():
+            reward -= 1.0
 
         return reward
     
@@ -413,11 +409,11 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
         # 3 for dx dy dz: end-effector distance to the goal (goal - ee)
         relative_vector = (goal_pos - tip_pos).astype(np.float32)  # dx, dy, dz
 
-        # Replace velocity with previous joint angles (6) and previous EE position (3)
+        
         prev_joint_angles = self.prev_joint_angles.astype(np.float32)
         prev_ee_pos = self.prev_ee_pos.astype(np.float32)
         
-        # 4 for gripper (end-effector) orientation as quaternion (w, x, y, z)
+        # orientation as quaternion (w, x, y, z)
         ee_quat = self.data.xquat[self.ee_body].astype(np.float32)
         
         # 6 for joint angles
@@ -430,7 +426,7 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
             self.data.qpos[self.joint_ids[5]],
         ], dtype=np.float32)
 
-        # 1 for gripper state: open or closed
+        
         gripper_state = np.array([self.gripper_state()], dtype=np.float32)
 
         # Observation: 29 dims (ee_pos + goal_pos + relative + prev_joints + prev_ee_pos + orientation + joints + gripper)
@@ -445,11 +441,11 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
             gripper_state,     # 1
         ]).astype(np.float32)
 
-       #  Online normalization (freeze after 100k steps to avoid distribution drift)
+       
         if self.mode == "train" and self._total_steps < self._norm_freeze_after_steps:
             self.obs_rms.update(obs_raw)
         
-        # Update previous trackers for next observation
+        
         self.prev_joint_angles = joint_angles.copy()
         self.prev_ee_pos = ee_pos.copy()
         
@@ -462,7 +458,7 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
         
         target = self.data.xpos[self.goal_body]
 
-     #  if object is pushed out the reaching zone, we stop the episode 
+     
         if target[0] > 0.7 or target[1]>0.7 : 
             print("collision detected at step", self.step_counter)
             return True
@@ -476,13 +472,13 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
         for i in range(self.data.ncon):
             c = self.data.contact[i]
             if c.geom1 == self.floor_geom or c.geom2 == self.floor_geom:
-                # Identify the "other" geom (not the floor) and its body
+              
                 other_geom = c.geom2 if c.geom1 == self.floor_geom else c.geom1
                 other_body = self.model.geom_bodyid[other_geom]
-                # Ignore floor contact with object or robot base
+                
                 if other_body in (self.goal_body, self.base_body):
                     continue
-                print(f"Touching floor at step {self.step_counter}")
+                # print(f"Touching floor at step {self.step_counter}")
                 return True
                 
         return False
@@ -496,7 +492,7 @@ class MujocoKinovaGraspEnv(EnvironmentSpec):
     
     def apply_controls(self, action):
         
-        gripper_action = action[6]*0.05
+        gripper_action = action[6]*0.1
         action = action[:6] * (math.pi / 64.0) 
         
         

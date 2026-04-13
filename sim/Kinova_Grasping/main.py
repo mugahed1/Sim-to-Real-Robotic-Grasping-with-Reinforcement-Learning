@@ -61,7 +61,7 @@ if __name__ == '__main__':
     #     agent.load_models(RESUME_EXP)
     #     env.obs_rms.load(exp=RESUME_EXP)
     
-    n_games = 4000
+    n_games = 3000
     collision_cnt = 0
     score_history, avg_score_history = [], []
     load_checkpoint = FLAGS.evaluate

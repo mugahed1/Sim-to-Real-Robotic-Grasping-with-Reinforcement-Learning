@@ -98,7 +98,7 @@ if __name__ == '__main__':
                 logging.debug(f"new obs: {observation_}, floor {obs_floor_}")
                 if evaluate:
                     reward_in_episode.append(f"{reward}+{shaping_reward}")
-                # reward += shaping_reward
+                reward += shaping_reward
 
                 agent.remember(observation, action, reward, observation_, terminated)
                 if not load_checkpoint:
@@ -145,7 +145,7 @@ if __name__ == '__main__':
             potentialagent.save_models(exp=expname)
             env.obs_rms.save(exp=expname)
             x = [i+1 for i in range(n_games)]
-            plot_learning_curve(x, score_history, figure_file=f'apf_ddpg_{expname}.png')
+            plot_learning_curve(x, score_history, figure_file=f'apf_sac_{expname}.png')
 
         potentialagent.memory_traj.get_nlargest_trajectories(N_good=1)
 

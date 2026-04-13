@@ -6,10 +6,17 @@ import termios
 import tty
 import numpy as np
 from scipy.spatial.transform import Rotation as R
-from stable_baselines3 import SAC
+from actor_numpy import ActorNP
+
+
+import collections
+if not hasattr(collections, "MutableMapping"):
+    from collections.abc import MutableMapping, MutableSequence
+    collections.MutableMapping = MutableMapping
+    collections.MutableSequence = MutableSequence
 
 import utilities
-from kinova_gen3 import KinovaGen3
+from kinova_high_level import KinovaGen3
 from normalization import RunningMeanStd
 
 
@@ -37,8 +44,8 @@ def convert_euler_to_quaternion(theta_x, theta_y, theta_z):
 def convert_action(action):
     action = np.asarray(action, dtype=np.float32)
 
-    joint_delta = action[:6] * (180.0 / 64.0)       
-    gripper_cmd = action[6] * 0.05              
+    joint_delta = action[:6] * (180.0 / 32.0)       
+    gripper_cmd = action[6] * 0.1              
 
     return np.concatenate([joint_delta, [gripper_cmd]]).astype(np.float32)
 
@@ -71,12 +78,13 @@ def log_obs_and_action(obs: np.ndarray, obs_normalized: np.ndarray, action: np.n
         obs_normalized: Observation returned by env (already normalized).
         action: Action applied.
     """
-    # Labels as constructed in MujocoKinovaGraspEnv.get_observation (23 dims)
+    # Labels as constructed in MujocoKinovaGraspEnv.get_observation (29 dims)
     labels = [
         "ee_x", "ee_y", "ee_z",
         "goal_x", "goal_y", "goal_z",
         "rel_dx", "rel_dy", "rel_dz",
-        "ee_vx", "ee_vy", "ee_vz",
+        "prev_J0", "prev_J1", "prev_J2", "prev_J3", "prev_J4", "prev_J5",
+        "prev_ee_x", "prev_ee_y", "prev_ee_z",
         "ee_qw", "ee_qx", "ee_qy", "ee_qz",
         "J0", "J1", "J2", "J3", "J4", "J5",
         "gripper",
@@ -96,31 +104,31 @@ def log_obs_and_action(obs: np.ndarray, obs_normalized: np.ndarray, action: np.n
     step+=1
 
 def main():
-    MODEL_PATH = "model/grasping_sac_final/sac_model"
-    RMS_PATH = "model/grasping_sac_final"  
+    
+    RMS_PATH = "model/exp3"  
 
+    ACTOR_WEIGHTS_NPZ = f"{RMS_PATH}/grasping_actor_weights.npz"
+    actor = ActorNP(ACTOR_WEIGHTS_NPZ)
     # Load normalization + model
-    rms = RunningMeanStd(shape=(23,))
+    rms = RunningMeanStd(shape=(29,))
     rms.load(RMS_PATH)
 
-    model = SAC.load(MODEL_PATH, env=None)
+    
 
     # Parse connection arguments
     parser = argparse.ArgumentParser()
     args = utilities.parseConnectionArguments(parser)
 
-    
+    # Define a fixed goal (example) — must match training meaning/units
     goal_pos = np.array([0.337, 0.395, 0.03], dtype=np.float32)
 
     with utilities.DeviceConnection.createTcpConnection(args) as router:
         kinova = KinovaGen3(router)
-        kinova.SetGripperCommands(0.13)
-        kinova.SetJointPositions([0, 0, 0, 0, 0, 0])
+        
 
         max_step = 150
         for step in range(max_step):
-            ee_linear_vel = kinova.GetEndEffectorLinearVelocity()
-            
+
             ee_pos = np.array(kinova.GetFingerCenterPosition(), dtype=np.float32)  # (3,)
                 
         
@@ -134,25 +142,27 @@ def main():
             gripper_state = np.array([np.clip(gripper_raw, 0.0, 1.0)], dtype=np.float32)  # (1,) for concat
             
 
-               
-            # print(f"ee_linear_vel: {ee_linear_vel}")
+            
             relative_vector = (goal_pos - ee_pos).astype(np.float32)                    # (3,)
             # print(f"gripper_state: {gripper_state}")
             obs = np.concatenate([
                 ee_pos,            # 3
                 goal_pos,          # 3
                 relative_vector,   # 3
-                ee_linear_vel,     # 3
+                kinova.prev_joint_angles, # 6
+                kinova.prev_ee_pos, # 3
                 ee_quat,           # 4
                 joint_angles,      # 6
                 gripper_state,     # 1
-            ]).astype(np.float32)  # total 23
+            ]).astype(np.float32)  # total 29
             # Print to console and append to output log file
             
+            kinova.prev_joint_angles = joint_angles
+            kinova.prev_ee_pos = ee_pos
             
-            obs_norm = rms.normalize(obs).astype(np.float32)  # shape (23,)
+            obs_norm = rms.normalize(obs).astype(np.float32)  # shape (29,)
 
-            action, _ = model.predict(obs_norm, deterministic=True)
+            action = actor.forward(obs_norm)
             action = np.clip(action, -1.0, 1.0)
             
             action_cmd = convert_action(action)
@@ -160,7 +170,7 @@ def main():
             log_obs_and_action(obs, obs_norm, action,step+1)
 
             kinova.SetJointAnglesIncremental(action_cmd[:6].tolist())   # delta degrees
-            kinova.SetGripperIncremental(float(action_cmd[6]))
+            kinova.SetGripperCommands(float(action_cmd[6]))
 
     
 if __name__ == "__main__":

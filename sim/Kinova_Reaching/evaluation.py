@@ -40,9 +40,7 @@ def log_obs_and_action(obs_normalized: np.ndarray, action: np.ndarray, env: Mujo
         # Fallback: avoid crash if shapes drift
         raise ValueError(f"Expected normalized observation of size {len(labels)}, got {obs_normalized.shape[0]}")
     
-    # Denormalize using the same epsilon used during normalization
-    # normalized = (obs - mean) / (sqrt(var) + eps)
-    # => obs = normalized * (sqrt(var) + eps) + mean
+
     scale = np.sqrt(var) + eps
     obs_raw = (obs_normalized * scale) + mean
     
@@ -59,32 +57,26 @@ def log_obs_and_action(obs_normalized: np.ndarray, action: np.ndarray, env: Mujo
 
 
 def main():
-    # 1) Create env without viewer first (avoid segfault if something crashes)
+    
     env_tmp = MujocoKinovaGraspEnv(visualize=False, mode="test")
     obs_dim = env_tmp.observation_space.shape[0]
-    act_dim = env_tmp.action_space.shape[0]   # should be 6
+    act_dim = env_tmp.action_space.shape[0]   
 
-    # 2) Rebuild actor EXACTLY like training
     actor = ActorNetwork(fc1_dims=128, fc2_dims=128, n_actions=act_dim)
 
-    # 3) Build variables (very important before load_weights)
     _ = actor(tf.zeros((1, obs_dim), dtype=tf.float32))
 
-    # 4) Load weights
     actor.load_weights(ACTOR_WEIGHTS)
     print("[OK] Loaded actor weights:", ACTOR_WEIGHTS)
 
-    # 5) Now launch viewer env
     env = MujocoKinovaGraspEnv(visualize=True, mode="test")
 
-    dt = env.model.opt.timestep          # 0.002
-    substeps = 20                        # because you do mj_step 20 times per env.step
-    control_dt = dt * substeps           # simulated seconds per env.step
+    dt = env.model.opt.timestep          
+    substeps = 20                        
+    control_dt = dt * substeps           
 
     n_eval_episodes = 10
     
-    # Define 10 different fixed goal positions for evaluation
-    # Positions extracted from actual evaluation run (rounded to 2 decimal places)
     fixed_goal_positions = [
         np.array([0.39, 0.34, 0.03], dtype=np.float64),  # Episode 0
         np.array([0.31, 0.38, 0.03], dtype=np.float64),  # Episode 1
@@ -99,11 +91,10 @@ def main():
     ]
     
     for ep in range(n_eval_episodes):
-        # Set the fixed goal position for this episode
         env.set_fixed_goal(fixed_goal_positions[ep])
         print(f"[EVAL] Episode {ep:02d} - Fixed goal position: {fixed_goal_positions[ep]}")
         step = 1
-        obs = env.reset()  # Will now use the fixed goal for this episode
+        obs = env.reset()  
         ep_return = 0.0
         print("object position: ", env.data.xpos[env.goal_body])
         for t in range(env.max_step_count):
